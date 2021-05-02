@@ -3,6 +3,11 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import time
 import tensorflow as tf
+# set tensorflow-macos
+# from tensorflow.python.framework.ops import disable_eager_execution
+# disable_eager_execution()
+# from tensorflow.python.compiler.mlcompute import mlcompute
+# mlcompute.set_mlc_device(device_name='any')
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 if len(physical_devices) > 0:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -24,7 +29,7 @@ from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
-flags.DEFINE_string('weights', './checkpoints/yolov4-416',
+flags.DEFINE_string('weights', './checkpoints/yolov4',
                     'path to weights file')
 flags.DEFINE_integer('size', 416, 'resize images to')
 flags.DEFINE_boolean('tiny', False, 'yolo or yolo-tiny')
@@ -34,16 +39,17 @@ flags.DEFINE_string('output', None, 'path to output video')
 flags.DEFINE_string('output_format', 'XVID', 'codec used in VideoWriter when saving video to file')
 flags.DEFINE_float('iou', 0.45, 'iou threshold')
 flags.DEFINE_float('score', 0.50, 'score threshold')
-flags.DEFINE_boolean('dont_show', False, 'dont show video output')
+flags.DEFINE_boolean('dont_show', True, 'dont show video output')
 flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
 flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
+flags.DEFINE_boolean('deep', False, 'apply the neural network component of deepsort')
 
 def main(_argv):
     # Definition of the parameters
     max_cosine_distance = 0.4
     nn_budget = None
     nms_max_overlap = 1.0
-    
+
     # initialize deep sort
     model_filename = 'model_data/mars-small128.pb'
     encoder = gdet.create_box_encoder(model_filename, batch_size=1)
@@ -62,7 +68,7 @@ def main(_argv):
 
     # load tflite model if flag is set
     if FLAGS.framework == 'tflite':
-        interpreter = tf.lite.Interpreter(model_path=FLAGS.weights)
+        interpreter = tf.lite.Interpreter(model_path=f'{FLAGS.weights}_{FLAGS.size}')
         interpreter.allocate_tensors()
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
@@ -70,7 +76,7 @@ def main(_argv):
         print(output_details)
     # otherwise load standard tensorflow saved model
     else:
-        saved_model_loaded = tf.saved_model.load(FLAGS.weights, tags=[tag_constants.SERVING])
+        saved_model_loaded = tf.saved_model.load(f'{FLAGS.weights}_{FLAGS.size}', tags=[tag_constants.SERVING])
         infer = saved_model_loaded.signatures['serving_default']
 
     # begin video capture
@@ -90,6 +96,7 @@ def main(_argv):
         codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
+    all_start_time = None
     frame_num = 0
     # while video is running
     while True:
@@ -98,15 +105,19 @@ def main(_argv):
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame)
         else:
-            print('Video has ended or failed, try a different video format!')
+            fps = float(frame_num) / (time.time() - all_start_time)
+            print("fps=%.2f size=%d frames=%d deep=%s output=%s" % (fps, FLAGS.size, frame_num, "true" if FLAGS.deep else "false", FLAGS.output))
             break
         frame_num +=1
-        print('Frame #: ', frame_num)
+        if FLAGS.info:
+            print('Frame #: ', frame_num)
+        start_time = time.time()
+        if all_start_time is None:
+            all_start_time = time.time()
         frame_size = frame.shape[:2]
         image_data = cv2.resize(frame, (input_size, input_size))
         image_data = image_data / 255.
         image_data = image_data[np.newaxis, ...].astype(np.float32)
-        start_time = time.time()
 
         # run detections on tflite if flag is set
         if FLAGS.framework == 'tflite':
@@ -158,9 +169,9 @@ def main(_argv):
 
         # by default allow all classes in .names file
         allowed_classes = list(class_names.values())
-        
+
         # custom allowed classes (uncomment line below to customize tracker for only people)
-        #allowed_classes = ['person']
+        allowed_classes = ['person']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
@@ -182,8 +193,12 @@ def main(_argv):
         scores = np.delete(scores, deleted_indx, axis=0)
 
         # encode yolo detections and feed to tracker
-        features = encoder(frame, bboxes)
-        detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
+        if FLAGS.deep:
+            features = encoder(frame, bboxes)
+            detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
+        else:
+            features = np.empty((len(bboxes), 128), np.float32)
+            detections = [Detection(bbox, score, class_name, []) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
 
         #initialize color map
         cmap = plt.get_cmap('tab20b')
@@ -194,7 +209,7 @@ def main(_argv):
         scores = np.array([d.confidence for d in detections])
         classes = np.array([d.class_name for d in detections])
         indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
-        detections = [detections[i] for i in indices]       
+        detections = [detections[i] for i in indices]
 
         # Call the tracker
         tracker.predict()
@@ -203,10 +218,10 @@ def main(_argv):
         # update tracks
         for track in tracker.tracks:
             if not track.is_confirmed() or track.time_since_update > 1:
-                continue 
+                continue
             bbox = track.to_tlbr()
             class_name = track.get_class()
-            
+
         # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
@@ -216,22 +231,27 @@ def main(_argv):
 
         # if enable info flag then print details about each track
             if FLAGS.info:
-                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
+                print("Tracker ID: {}, Class: {}, BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
 
-        # calculate frames per second of running detections
-        fps = 1.0 / (time.time() - start_time)
-        print("FPS: %.2f" % fps)
         result = np.asarray(frame)
         result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        
+
         if not FLAGS.dont_show:
             cv2.imshow("Output Video", result)
-        
+
         # if output flag is set, save video file
         if FLAGS.output:
             out.write(result)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
-    cv2.destroyAllWindows()
+
+        # calculate frames per second of running detections
+        if FLAGS.info:
+            fps = 1.0 / (time.time() - start_time)
+            print("fps=%.2f" % fps)
+
+        if not FLAGS.dont_show:
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
+    if not FLAGS.dont_show:
+        cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     try:

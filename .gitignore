@@ -1,0 +1,6 @@
+__pycache__
+.DS_Store
+checkpoints
+data/*.weights
+outputs
+venv

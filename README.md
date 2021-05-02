@@ -50,10 +50,10 @@ If you want to use yolov4-tiny.weights, a smaller model that is faster at runnin
 To implement the object tracking using YOLOv4, first we convert the .weights into the corresponding TensorFlow model which will be saved to a checkpoints folder. Then all we need to do is run the object_tracker.py script to run our object tracker with YOLOv4, DeepSort and TensorFlow.
 ```bash
 # Convert darknet weights to tensorflow model
-python save_model.py --model yolov4 
+python save_model.py --model yolov4
 
 # Run yolov4 deep sort object tracker on video
-python object_tracker.py --video ./data/video/test.mp4 --output ./outputs/demo.avi --model yolov4
+python object_tracker.py --video ./data/video/test.mp4 --output ./outputs/demo.avi --model yolov4 --size 640
 
 # Run yolov4 deep sort object tracker on webcam (set video flag to 0)
 python object_tracker.py --video 0 --output ./outputs/webcam.avi --model yolov4
@@ -108,7 +108,7 @@ save_model.py:
     (default: tf)
   --model: yolov3 or yolov4
     (default: yolov4)
-    
+
  object_tracker.py:
   --video: path to input video (use 0 for webcam)
     (default: './data/video/test.mp4')
@@ -136,7 +136,7 @@ save_model.py:
     (default: False)
 ```
 
-### References  
+### References
 
    Huge shoutout goes to hunglc007 and nwojke for creating the backbones of this repository:
   * [tensorflow-yolov4-tflite](https://github.com/hunglc007/tensorflow-yolov4-tflite)
