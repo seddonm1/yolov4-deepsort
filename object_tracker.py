@@ -29,8 +29,7 @@ from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
-flags.DEFINE_string('weights', './checkpoints/yolov4',
-                    'path to weights file')
+flags.DEFINE_string('weights', './checkpoints/yolov4', 'path to weights file')
 flags.DEFINE_integer('size', 416, 'resize images to')
 flags.DEFINE_boolean('tiny', False, 'yolo or yolo-tiny')
 flags.DEFINE_string('model', 'yolov4', 'yolov3 or yolov4')
@@ -60,9 +59,11 @@ def main(_argv):
 
     # load configuration for object detector
     config = ConfigProto()
-    config.gpu_options.allow_growth = True
-    session = InteractiveSession(config=config)
-    STRIDES, ANCHORS, NUM_CLASS, XYSCALE = utils.load_config(FLAGS)
+    config.gpu_options.allow_growth = False
+    config.gpu_options.per_process_gpu_memory_fraction = 0.1
+
+    _ = InteractiveSession(config=config)
+    utils.load_config(FLAGS)
     input_size = FLAGS.size
     video_path = FLAGS.video
 
@@ -103,18 +104,17 @@ def main(_argv):
         return_value, frame = vid.read()
         if return_value:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame)
+            Image.fromarray(frame)
         else:
             fps = float(frame_num) / (time.time() - all_start_time)
             print("fps=%.2f size=%d frames=%d deep=%s output=%s" % (fps, FLAGS.size, frame_num, "true" if FLAGS.deep else "false", FLAGS.output))
             break
         frame_num +=1
         if FLAGS.info:
-            print('Frame #: ', frame_num)
+            print("frame_num=%d" % frame_num)
         start_time = time.time()
         if all_start_time is None:
             all_start_time = time.time()
-        frame_size = frame.shape[:2]
         image_data = cv2.resize(frame, (input_size, input_size))
         image_data = image_data / 255.
         image_data = image_data[np.newaxis, ...].astype(np.float32)
@@ -126,22 +126,19 @@ def main(_argv):
             pred = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
             # run detections using yolov3 if flag is set
             if FLAGS.model == 'yolov3' and FLAGS.tiny == True:
-                boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25,
-                                                input_shape=tf.constant([input_size, input_size]))
+                boxes, pred_conf = filter_boxes(pred[1], pred[0], score_threshold=0.25, input_shape=tf.constant([input_size, input_size]))
             else:
-                boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25,
-                                                input_shape=tf.constant([input_size, input_size]))
+                boxes, pred_conf = filter_boxes(pred[0], pred[1], score_threshold=0.25, input_shape=tf.constant([input_size, input_size]))
         else:
             batch_data = tf.constant(image_data)
             pred_bbox = infer(batch_data)
-            for key, value in pred_bbox.items():
+            for _, value in pred_bbox.items():
                 boxes = value[:, :, 0:4]
                 pred_conf = value[:, :, 4:]
 
         boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
             boxes=tf.reshape(boxes, (tf.shape(boxes)[0], -1, 1, 4)),
-            scores=tf.reshape(
-                pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
+            scores=tf.reshape(pred_conf, (tf.shape(pred_conf)[0], -1, tf.shape(pred_conf)[-1])),
             max_output_size_per_class=50,
             max_total_size=50,
             iou_threshold=FLAGS.iou,
@@ -195,10 +192,10 @@ def main(_argv):
         # encode yolo detections and feed to tracker
         if FLAGS.deep:
             features = encoder(frame, bboxes)
-            detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
         else:
-            features = np.empty((len(bboxes), 128), np.float32)
-            detections = [Detection(bbox, score, class_name, []) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
+            features = np.empty((len(bboxes), 0), np.float32)
+
+        detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
 
         #initialize color map
         cmap = plt.get_cmap('tab20b')
